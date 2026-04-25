@@ -1,0 +1,69 @@
+{% extends "_base.html" %}
+{% block title %}Семьи и пациенты — Health OS{% endblock %}
+{% block content %}
+
+<section class="grid">
+
+  <div class="card">
+    <h2>👨‍👩‍👧 Семьи</h2>
+    {% if families %}
+    <ul class="list">
+      {% for f in families %}
+        <li><strong>{{ f.name }}</strong>{% if f.notes %} <span class="muted">— {{ f.notes }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">Пусто. Добавь первую семью ниже.</p>{% endif %}
+
+    <details>
+      <summary>+ добавить семью</summary>
+      <form method="post" action="/families/create" class="form">
+        <label>Название <input name="name" required placeholder="Семья Кубальских"></label>
+        <label>Заметки <input name="notes" placeholder="опционально"></label>
+        <button>Создать</button>
+      </form>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>👤 Пациенты</h2>
+    {% if patients %}
+    <ul class="list">
+      {% for p in patients %}
+        <li>
+          <a href="/patients/{{ p.id }}"><strong>{{ p.full_name }}</strong></a>
+          {% if p.birth_date %}<span class="muted">— {{ p.birth_date }}</span>{% endif %}
+          {% if p.sex %}<span class="badge">{{ p.sex }}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">Нет пациентов.</p>{% endif %}
+
+    <details>
+      <summary>+ добавить пациента</summary>
+      <form method="post" action="/patients/create" class="form">
+        <label>ФИО <input name="full_name" required placeholder="Кубальская И.В."></label>
+        <label>Семья
+          <select name="family_id">
+            <option value="">— без семьи —</option>
+            {% for f in families %}
+            <option value="{{ f.id }}">{{ f.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Дата рождения <input type="date" name="birth_date"></label>
+        <label>Пол
+          <select name="sex">
+            <option value="">—</option>
+            <option value="f">женский</option>
+            <option value="m">мужской</option>
+            <option value="other">другое</option>
+          </select>
+        </label>
+        <button>Создать</button>
+      </form>
+    </details>
+  </div>
+
+</section>
+
+{% endblock %}
