@@ -1,0 +1,226 @@
+# Health OS — локальный стек
+# Запуск:   docker compose up -d
+# Логи:     docker compose logs -f
+# Статус:   docker compose ps
+#
+# Сети:
+#   - healthos_backend — внутренняя, без выхода в интернет (PHI-контур)
+#   - healthos_frontend — с публикацией портов только на 127.0.0.1
+#
+# Порты, открытые на LOOPBACK (127.0.0.1):
+#   8080  — HAPI FHIR (REST)
+#   9000  — MinIO S3 API
+#   9001  — MinIO Web Console
+#   11434 — Ollama API
+#   5432  — Postgres (для локальных psql/pgAdmin; не пробрасывать наружу)
+#
+# Чтобы открыть консоль с другого устройства в LAN — использовать Tailscale/ZeroTier,
+# НЕ менять 127.0.0.1 на 0.0.0.0.
+
+name: healthos
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ────────────────────────────────────────────────────────────────
+  # Postgres с pgvector: бэкенд HAPI + собственная схема ingest
+  # ────────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: healthos-postgres
+    <<: [*restart, *logging]
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/pg_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+      POSTGRES_DB: healthos
+      # HAPI и ingest хранятся в одном инстансе, разные схемы.
+      # Внутри init.sql создаются роли и базы: hapi, ingest.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    secrets: [pg_user, pg_password]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/pg_user) -d healthos"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - backend
+    shm_size: 512m
+
+  # ────────────────────────────────────────────────────────────────
+  # HAPI FHIR R5 server
+  # ────────────────────────────────────────────────────────────────
+  hapi:
+    image: hapiproject/hapi:latest
+    container_name: healthos-hapi
+    <<: [*restart, *logging]
+    environment:
+      # Конфиг лежит рядом и монтируется read-only.
+      # Поверх можно переопределять через spring.config.import или env.
+      SPRING_CONFIG_LOCATION: file:/app/config/application.yaml
+      # JVM: при 16GB RAM хоста — 2GB хватит с запасом
+      JAVA_OPTS: "-Xms512m -Xmx2g -XX:+UseG1GC -Duser.timezone=Europe/Moscow"
+    volumes:
+      - ./hapi/application.yaml:/app/config/application.yaml:ro
+      - hapi_data:/data/hapi  # Lucene-индексы и временные файлы
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/fhir/metadata >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
+    networks:
+      - backend
+      - frontend
+
+  # ────────────────────────────────────────────────────────────────
+  # MinIO — object storage для сырых PDF/EML/DICOM
+  # ────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: healthos-minio
+    <<: [*restart, *logging]
+    command: server /data --console-address ":9001" --address ":9000"
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+      MINIO_BROWSER_REDIRECT_URL: http://127.0.0.1:9001
+      MINIO_SERVER_URL: http://127.0.0.1:9000
+      # Жизненный цикл и версионирование настраиваются через init-контейнер ниже.
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    secrets: [minio_user, minio_password]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks:
+      - backend
+      - frontend
+
+  # Создание бакетов и политик при первом запуске. Отрабатывает один раз и выходит.
+  minio-init:
+    image: minio/mc:latest
+    container_name: healthos-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_USER_FILE: /run/secrets/minio_user
+      MINIO_PASSWORD_FILE: /run/secrets/minio_password
+    entrypoint: ["/bin/sh", "/init.sh"]
+    volumes:
+      - ./minio/init.sh:/init.sh:ro
+    secrets: [minio_user, minio_password]
+    networks:
+      - backend
+    restart: "no"
+
+  # ────────────────────────────────────────────────────────────────
+  # Ollama — локальный LLM-рантайм (Qwen 2.5 / MedGemma / Whisper-ready)
+  # ────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: healthos-ollama
+    <<: [*restart, *logging]
+    environment:
+      OLLAMA_KEEP_ALIVE: "30m"          # держать модель в памяти 30 мин после запроса
+      OLLAMA_NUM_PARALLEL: "2"          # параллельные запросы
+      OLLAMA_MAX_LOADED_MODELS: "2"     # одновременно в памяти
+      OLLAMA_HOST: "0.0.0.0:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - backend
+      - frontend
+    # GPU (NVIDIA): раскомментируй блок ниже, если есть CUDA.
+    # Требует nvidia-container-toolkit. На Mac с Apple Silicon Docker использует CPU —
+    # для нативного GPU на Mac лучше ставить Ollama бинарь напрямую, не в Docker.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Один раз на старте скачивает нужные модели.
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: healthos-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "/init.sh"]
+    volumes:
+      - ./ollama/init.sh:/init.sh:ro
+    networks:
+      - backend
+    restart: "no"
+
+# ────────────────────────────────────────────────────────────────
+# Volumes (именованные, на локальном диске)
+# ────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  hapi_data:
+  minio_data:
+  ollama_data:
+
+# ────────────────────────────────────────────────────────────────
+# Networks
+# ────────────────────────────────────────────────────────────────
+networks:
+  backend:
+    # Внутренняя сеть — PHI не видит внешний мир.
+    driver: bridge
+    internal: false  # временно false: minio-init и ollama-init тянут файлы из интернета
+    # После первого запуска можно сделать internal: true и пересоздать сеть.
+  frontend:
+    driver: bridge
+
+# ────────────────────────────────────────────────────────────────
+# Secrets (файлы из ./secrets, не коммитить)
+# ────────────────────────────────────────────────────────────────
+secrets:
+  pg_user:
+    file: ./secrets/pg_user
+  pg_password:
+    file: ./secrets/pg_password
+  minio_user:
+    file: ./secrets/minio_user
+  minio_password:
+    file: ./secrets/minio_password

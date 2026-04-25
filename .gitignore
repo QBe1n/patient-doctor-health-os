@@ -1,0 +1,16 @@
+# Никогда не коммитим секреты и данные
+secrets/*
+!secrets/README.md
+
+.env
+*.env.local
+
+# Docker volumes мапятся в named volumes, но на всякий
+data/
+volumes/
+
+# Служебное
+.DS_Store
+*.log
+.idea/
+.vscode/

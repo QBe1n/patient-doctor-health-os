@@ -1,0 +1,98 @@
+# HAPI FHIR JPA server — конфиг для локального self-hosted Health OS.
+# Документация: https://github.com/hapifhir/hapi-fhir-jpaserver-starter
+
+spring:
+  main:
+    allow-circular-references: true
+    allow-bean-definition-overriding: true
+
+  # Подключение к Postgres (pgvector) из соседнего контейнера.
+  # Пароль/логин можно через env. Здесь — дефолты из secrets/.
+  datasource:
+    url: jdbc:postgresql://postgres:5432/hapi?stringtype=unspecified
+    username: ${PG_USER:healthos}
+    password: ${PG_PASSWORD:changeme}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+  jpa:
+    properties:
+      hibernate:
+        dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgres94Dialect
+        jdbc.lob.non_contextual_creation: true
+        search.backend.type: lucene
+        search.backend.directory.type: local-filesystem
+        search.backend.directory.root: /data/hapi/lucene
+
+hapi:
+  fhir:
+    # Работаем на R5 (с возможностью позже включить совместимость с R4 bundle).
+    fhir_version: R5
+
+    # Разрешаем все CRUD-операции со стандартными ресурсами
+    server_address: http://localhost:8080/fhir
+    default_page_size: 50
+    max_page_size: 500
+
+    # CORS: только LAN-loopback и Tailscale-диапазоны.
+    # Снаружи сервер недоступен (порт на 127.0.0.1 в compose).
+    cors:
+      allow_Credentials: true
+      allowed_origin:
+        - "http://localhost:*"
+        - "http://127.0.0.1:*"
+        - "http://healthos.local:*"
+        - "http://100.*"   # Tailscale CGNAT
+        - "http://10.*"
+
+    # Валидация ресурсов при записи. Жёсткая — хотим ловить ошибки маппинга на старте.
+    validation:
+      requests_enabled: true
+      responses_enabled: false
+
+    # Подписки не нужны на MVP (используем polling через наш ingest-agent).
+    subscription:
+      resthook_enabled: false
+      websocket_enabled: false
+      email:
+        enabled: false
+
+    # Индексирование терминологии LOINC: терминологический сервис не поднимаем на MVP,
+    # валидация кодов пойдёт против встроенных справочников HAPI.
+    # Позже можно подключить свой ValueSet c русскими display.
+    enforce_referential_integrity_on_delete: false
+    enforce_referential_integrity_on_write: true
+
+    # Авторизация на MVP: доверенная LAN. На шаге «второй пациент / врач» —
+    # включаем Smile/Authless + keycloak sidecar.
+    reuse_cached_search_results_millis: 60000
+
+    # Bundle-транзакции (используются ingest-агентом для atomic insert)
+    allow_multiple_delete: false
+    allow_external_references: false
+    allow_placeholder_references: true
+    allow_override_default_search_params: true
+
+    # Версионирование ресурсов — оставляем включённым, нужно для аудит-трейла
+    delete_expunge_enabled: true
+
+    # OpenAPI UI доступен на /fhir/swagger-ui — удобно для ручной проверки
+    openapi_enabled: true
+
+    # Логирование запросов — без PHI в логе (пишем только meta)
+    logger:
+      logger_name: fhir.access
+      format: "${remoteAddr} ${requestId} ${operationType} ${resourceType}/${idPart}"
+      log_exceptions: true
+      error_format: "ERROR ${requestVerb} ${requestUrl} -> ${exceptionMessageShort}"
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+  tomcat:
+    threads:
+      max: 50
+      min-spare: 5
