@@ -1,160 +1,146 @@
 # Patient & Doctor Health OS
 
-Локальный self-hosted фундамент для personal Health OS под РФ-рынок: HAPI FHIR R5, Postgres с pgvector, MinIO и Ollama. Всё локально, всё open-source, всё на loopback — наружу ничего не торчит.
+> Local-first family health OS — your medical history, on your laptop. No cloud, no vendor, no NDA.
 
-Это база под ingest-агента лабораторных анализов (Инвитро/Гемотест/KDL/...) и последующие агенты подготовки визита, алертов, постобработки.
+[![status: alpha](https://img.shields.io/badge/status-alpha-orange)](https://github.com/QBe1n/patient-doctor-health-os)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![FHIR R4](https://img.shields.io/badge/FHIR-R4-red)](https://hl7.org/fhir/R4/)
+[![docker compose](https://img.shields.io/badge/docker-compose-2496ed?logo=docker&logoColor=white)](docker-compose.yml)
+[![self-hosted](https://img.shields.io/badge/self--hosted-✓-success)]()
 
-> ⚠️ **Дисклеймер.** Проект не является медицинским изделием и не заменяет врача. Используется как личный инструмент агрегации данных и подготовки к визитам. Все клинические решения — только профильный специалист.
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│   Family ──< Patient ──< Visit ──< Observation (FHIR-style)          │
+│                │                                                     │
+│                ├──< Active problem ──> CarePlan template             │
+│                │           │                                         │
+│                │           └──< Personal task                        │
+│                │                                                     │
+│                └──< Files (PDF / images, stored in MinIO)            │
+│                                                                      │
+│   Postgres + pgvector  ·  MinIO  ·  HAPI FHIR  ·  FastAPI  ·  HTMX   │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
 
-## Документация
+## Why
 
-- [docs/health-os-plan-rf.md](docs/health-os-plan-rf.md) — основной план под РФ-рынок (ЕМИАС, 152-ФЗ, локальные лабы).
-- [docs/ingest-agent-architecture.md](docs/ingest-agent-architecture.md) — архитектура ingest-агента (9 модулей, парсинг PDF, маппинг LOINC, запись в HAPI FHIR).
-- [docs/health-os-plan.md](docs/health-os-plan.md) — исходная (UAE) версия плана.
+You see five different doctors. Each one has a partial picture, on paper, in their CRM, on a USB stick. Your last lipid panel is in a PDF you can't find. Three years of IOP readings are scattered across photos in your camera roll.
 
----
+Health OS is a single timeline for one family (1–3 patients, in practice). Add a visit, paste in HbA1c, drop a PDF, mark a task done. Next time the doctor asks "when did this start?" — you have an answer, not a guess.
 
-## Что внутри
+It runs entirely on your machine. Turn it off when you don't need it, turn it back on next month, all your data is still there.
 
-| Сервис | Порт (127.0.0.1) | Назначение |
-|---|---|---|
-| HAPI FHIR | 8080 | Медицинское ядро: Patient, Observation, DiagnosticReport, ... |
-| Postgres 16 + pgvector | 5432 | Бэкенд HAPI + БД `ingest` с таблицами состояния и LOINC-словарём |
-| MinIO | 9000 (API), 9001 (UI) | Object storage: сырые .eml, PDF-вложения, будущие DICOM |
-| Ollama | 11434 | Локальный LLM-рантайм (Qwen 2.5 / MedGemma / BGE-M3) |
+**This is not a medical device.** It's a personal record-keeping tool and checklist. All clinical decisions belong to your physician.
 
-## Требования
-
-- Docker 24+ и Docker Compose v2 (`docker compose`, без дефиса).
-- Минимум **16 ГБ RAM** и **40 ГБ свободного диска** на первый запуск (модели Ollama ≈ 15 ГБ).
-- Профиль `lite` в `.env` — если меньше памяти.
-- Linux/macOS. На Windows — через WSL2.
-- На Mac с Apple Silicon: Docker CPU ок, но Ollama быстрее работает нативно (бинарь + `OLLAMA_HOST=0.0.0.0:11434`). См. раздел «Mac/GPU» ниже.
-
-## Быстрый старт
+## Quick start (60 seconds)
 
 ```bash
-cd health-os
-cp .env.example .env          # и при желании меняем OLLAMA_PROFILE
-make up                       # создаст секреты и поднимет стек
-make wait                     # ждём пока всё стартует (первый раз 15–30 мин — тянутся модели)
-make smoke                    # пишет тестового Patient и читает обратно
+git clone https://github.com/QBe1n/patient-doctor-health-os
+cd patient-doctor-health-os/local-stack
+make up
 ```
 
-**Что произойдёт на `make up`:**
+Open <http://localhost:3000>. Add a family. Add a patient. Done.
 
-1. Создадутся файлы в `./secrets/` со случайными паролями.
-2. Docker поднимет Postgres, применит SQL из `postgres/init/` — создаст БД `hapi` и `ingest`, включит pgvector/pgcrypto, зальёт 30 LOINC-синонимов на русском и 3 критических порога.
-3. HAPI FHIR стартует, мигрирует схему в `hapi`, поднимает REST на `:8080/fhir`.
-4. MinIO стартует, sidecar `minio-init` создаст бакеты: `raw-emails`, `raw-attachments`, `documents`, `pipeline`, `imaging`.
-5. Ollama стартует, sidecar `ollama-init` скачает модели по выбранному профилю.
+Want a populated example? `make seed-kub` loads a realistic patient (3 visits, 9 observations, 5 active problems, 9 follow-up tasks) so you can see what a filled-in chart looks like before entering your own data.
 
-## Проверка вручную
+## What you get
+
+| URL | What it is |
+|---|---|
+| <http://localhost:3000> | Web UI — patients, visits, observations, tasks, files |
+| <http://localhost:8000/docs> | REST API with Swagger — for scripts, automations, ingest agents |
+| <http://localhost:9001> | MinIO console — every uploaded PDF, scan, photo |
+| <http://localhost:8080> | HAPI FHIR R4 server — for interoperability with real medical systems |
+
+All on `localhost`. Nothing leaves your machine.
+
+## A real example
+
+A patient is monitored for suspected glaucoma. Three visits over four months. Without Health OS you have a stack of paper. With it:
 
 ```bash
-# HAPI — capability statement
-curl -s http://localhost:8080/fhir/metadata | jq '.software'
+# add the visit
+curl -X POST http://localhost:8000/visits \
+  -H 'Content-Type: application/json' \
+  -d '{"patient_id":"…","visit_date":"2026-02-09","specialty":"ophth",
+       "practitioner":"Dr. Pliss","summary":"IOP OS rose to 21.5 mmHg, perimetry recommended"}'
 
-# Postgres — pgvector и словарь
-docker compose exec postgres psql -U healthos -d ingest -c \
-  "select extname from pg_extension; select count(*) from loinc_ru_synonyms;"
+# log the readings — auto-flagged against reference range
+curl -X POST http://localhost:8000/observations \
+  -H 'Content-Type: application/json' \
+  -d '{"patient_id":"…","code":"IOP_OS","value_num":21.5,"unit":"mmHg",
+       "ref_low":10,"ref_high":21,"observed_at":"2026-02-09T10:00:00+03:00"}'
+# → flag: "high" (set automatically)
 
-# MinIO — список бакетов (через консоль)
-open http://localhost:9001
-# Логин и пароль — из secrets/minio_user и secrets/minio_password
-
-# Ollama — какие модели подтянулись
-curl -s http://localhost:11434/api/tags | jq '.models[].name'
-
-# Пробный запрос к LLM
-curl -s http://localhost:11434/api/generate -d '{
-  "model": "qwen2.5:14b-instruct-q4_K_M",
-  "prompt": "Ответь по-русски: что измеряет HbA1c?",
-  "stream": false
-}' | jq -r '.response'
+# upload the report PDF
+curl -X POST http://localhost:8000/files \
+  -F patient_id=… -F file=@report.pdf
 ```
 
-## Структура проекта
+Now the patient page shows the full IOP timeline (16.6 → 21.5), the linked PDF, the active problem ("Suspected glaucoma OS"), and a critical-priority task ("Perimetry + gonioscopy + OCT") with a deadline.
+
+## How data persists
+
+Everything lives in named Docker volumes:
 
 ```
-health-os/
-├── docker-compose.yml              главный compose
-├── Makefile                        команды для работы со стеком
-├── .env.example                    дефолты (версии образов, профиль моделей)
-├── .gitignore
-├── hapi/
-│   └── application.yaml            конфиг HAPI (R5, PG, CORS, валидация)
-├── postgres/
-│   └── init/
-│       └── 00-extensions-and-dbs.sql   создание БД hapi/ingest, расширения, seed
-├── minio/
-│   └── init.sh                     создание бакетов и политик
-├── ollama/
-│   └── init.sh                     pull моделей по профилю
-└── secrets/
-    └── README.md                   как генерировать/ротировать пароли
+health_os_pgdata      ← Postgres (patients, visits, observations, tasks)
+health_os_miniodata   ← MinIO (every PDF and image you upload)
+health_os_ollamadata  ← Ollama models (only if you use the AI profile)
 ```
 
-## Профили Ollama
+`docker compose down` does **not** touch them. They survive reboots, OS upgrades, and Docker Desktop restarts. The only command that wipes data is `make nuke` (with a 5-second pause to think).
 
-Выбираются через `OLLAMA_PROFILE` в `.env`. Скрипт идемпотентен — можно переключать на ходу и делать `make ollama-pull`.
-
-| Профиль | RAM/VRAM | Модели |
-|---|---|---|
-| `lite` | 8–12 ГБ | Saiga-Llama3 8B + MedGemma 4B + nomic-embed-text |
-| `base` | 16 ГБ | Qwen 2.5 14B + MedGemma 4B + BGE-M3 (рекомендуется) |
-| `heavy` | 24+ ГБ | Qwen 2.5 32B + MedGemma 27B + BGE-M3 |
-
-Эмбеддинг-модель (BGE-M3 или nomic) используется ingest-агентом для семантического поиска LOINC по русским названиям показателей. Размерность колонки `loinc_embeddings.embedding` в БД — **1024** (подходит для BGE-M3 и multilingual-e5-large). Для nomic (768) колонку нужно пересоздать на `vector(768)`.
-
-## Mac с Apple Silicon и GPU
-
-Docker Desktop на Mac запускает контейнеры под Linux/VM — Ollama там не видит Metal и работает на CPU (медленно). Два варианта:
-
-**Вариант A (рекомендуется на Mac).** Ollama ставится нативно, остальное — в Docker. В `docker-compose.yml` закомментировать сервисы `ollama` и `ollama-init`, и на хосте сделать:
+## Day-to-day commands
 
 ```bash
-brew install ollama
-brew services start ollama
-OLLAMA_HOST=http://host.docker.internal:11434   # для ingest-агента в контейнере
+make up         # start the stack
+make down       # stop (data is preserved)
+make seed-kub   # load the example patient (idempotent)
+make backup     # dump DB + tar MinIO into ./backups/
+make restore F=backups/db-YYYY-MM-DD.sql
+make logs       # tail logs
+make ai-up      # start Ollama for local LLM ingest (optional)
+make nuke       # ⚠️  wipe everything (with confirmation)
 ```
 
-**Вариант B (Linux с NVIDIA GPU).** В `docker-compose.yml` раскомментировать блок `deploy.resources.reservations.devices` в сервисе `ollama`. Установить [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/). После этого `docker compose up -d ollama` подхватит CUDA.
+## Two stacks in one repo
 
-## Безопасность: что здесь уже сделано
+This repo has two compose stacks. Pick one.
 
-- Все порты на `127.0.0.1` — снаружи машины ничего не видно.
-- Postgres и MinIO — через Docker secrets (файлы в `./secrets/`), не через env в open text.
-- HAPI CORS — только loopback и приватные подсети (10.x, Tailscale 100.x).
-- HAPI anonymous access: разрешён локально. Для продакшна (второй пациент) нужно включить auth — см. раздел «Что НЕ сделано».
-- MinIO anonymous access — закрыт (`mc anonymous set none`).
+**`local-stack/`** — the recommended starting point. FastAPI + HTMX UI, Postgres + pgvector, MinIO, HAPI FHIR, optional Ollama. Boots in 30 seconds. Storage-only auth (localhost only). This is what `make up` above runs.
 
-## Что НЕ сделано (сознательно, для MVP)
+**Root `docker-compose.yml`** — the heavier "ingest research" stack. HAPI FHIR R4 + LOINC seed data + 14B+ LLMs via Ollama profiles. Aimed at building a lab-PDF ingestion pipeline. Documented separately in [`docs/health-os-plan-rf.md`](docs/health-os-plan-rf.md). Skip it unless you specifically want that.
 
-1. **Аутентификация HAPI.** Сейчас кто угодно в LAN может писать в FHIR. Ок для single-user на домашней машине. Для второго пациента/врача — добавляем Keycloak/Authentik сбоку и интерсептор SMART-on-FHIR.
-2. **TLS.** Внутри compose — plain HTTP. Для доступа с телефона — ставим поверх Tailscale (он сам шифрует) или [Caddy](https://caddyserver.com) с self-signed cert.
-3. **Бэкапы.** Компоуз только поднимает сервисы. Бэкапы volumes (`postgres_data`, `minio_data`) — отдельной ролью через [restic](https://restic.net) или снапшоты ZFS/Btrfs. Пример скрипта добавим на следующем этапе.
-4. **Внешний доступ.** Ничего наружу. Когда нужно пуш-уведомления в Telegram — поднимаем Cloudflared tunnel только для ingress webhook'а, не для самого HAPI.
-5. **LOINC-полный справочник.** В `loinc_ru_synonyms` — только 30 популярных показателей. Полный LOINC (100k+ записей) и индекс эмбеддингов для `loinc_embeddings` грузится отдельным скриптом из ingest-агента на Дне 3 MVP.
-6. **Русский ValueSet для валидации.** HAPI валидирует на встроенных. Свой ValueSet с `concept.designation[ru]` — на v2.
-7. **Ingest-worker.** Это следующий слой — отдельный Python-сервис, описан в `ingest_agent_architecture.md`. Его docker-compose кусок добавим, когда напишем код.
+## Roadmap
 
-## Полезные команды
+- [x] Family Mode schema (families → patients → visits → observations → problems → tasks)
+- [x] Local Docker stack with persistent volumes
+- [x] Web UI for manual entry
+- [x] FHIR R4 endpoint for interop
+- [ ] PDF ingest agent (lab reports → observations, with LOINC mapping)
+- [ ] Trend charts in the UI (IOP, HbA1c, lipids over time)
+- [ ] CarePlan template library (NAFLD, hypertension, glaucoma monitoring) → instantiated per patient
+- [ ] Optional Notion mirror (this is the source of truth, Notion as read view)
+- [ ] FHIR Bundle export (so you can move to a real EHR if needed)
 
-```bash
-make ps            # статус всех сервисов
-make logs          # логи всех сервисов
-make psql-ingest   # psql shell в ingest БД
-make psql-hapi     # psql shell в hapi БД (бэкенд HAPI)
-make smoke         # проверка работоспособности
-make down          # остановить без удаления данных
-make nuke          # ВНИМАНИЕ: удалить всё включая volumes
-```
+## Status
 
-## Дальше
+Alpha. Built and used by one family. The schema works, the stack boots, data persists. Expect rough edges, no auth (localhost-only by design), and breaking schema changes before 1.0. PRs and issues welcome — especially from anyone running it for their own family.
 
-- [ ] Написать ingest-worker (Python) по спецификации в `ingest_agent_architecture.md`.
-- [ ] Загрузить полный LOINC и построить эмбеддинг-индекс (отдельный скрипт `scripts/load_loinc.py`).
-- [ ] Реализовать первый lab profile (Инвитро) на реальных PDF.
-- [ ] Прикрутить бэкапы (restic в Selectel/Timeweb S3 или локальный NAS).
-- [ ] Вторая машина (Tailscale) → доступ к Notion/Telegram-боту из офиса.
+## Contributing
+
+This started as a personal tool. If you're using it for your own family, open an issue with what's missing or broken. Pull requests for ingest agents, CarePlan templates, or UI improvements are welcome.
+
+For larger changes, open a discussion first. Code style: [Karpathy-grade simplicity](https://karpathy.bearblog.dev/simplicity/) — small files, obvious names, no premature abstractions.
+
+## License
+
+[MIT](LICENSE). Use it, fork it, run it for your grandmother.
+
+## Disclaimer
+
+Patient & Doctor Health OS is **not a medical device**, **not a substitute for medical advice**, and **not certified for clinical use**. It's a personal data tool and checklist. All diagnoses, treatments, and clinical decisions belong to a licensed physician.
