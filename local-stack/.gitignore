@@ -1,0 +1,8 @@
+.env
+backups/*.sql
+backups/*.tar.gz
+backend/__pycache__/
+backend/*.pyc
+web/__pycache__/
+web/*.pyc
+.DS_Store

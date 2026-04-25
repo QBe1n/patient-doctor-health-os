@@ -1,0 +1,205 @@
+{% extends "_base.html" %}
+{% set p = s.patient %}
+{% block title %}{{ p.full_name }} — Health OS{% endblock %}
+{% block content %}
+
+<a href="/" class="back">← все пациенты</a>
+
+<h1>{{ p.full_name }}</h1>
+<p class="muted">
+  {% if p.birth_date %}ДР {{ p.birth_date }} · {% endif %}
+  {% if p.sex %}{{ p.sex }} · {% endif %}
+  {% if s.family %}семья: {{ s.family.name }}{% endif %}
+</p>
+
+<section class="grid">
+
+  <!-- ── Активные проблемы ── -->
+  <div class="card">
+    <h2>🎯 Активные проблемы</h2>
+    {% if s.problems %}
+    <ul class="list">
+      {% for pr in s.problems %}
+      <li>
+        <strong>{{ pr.title }}</strong>
+        {% if pr.icd10 %}<span class="muted">{{ pr.icd10 }}</span>{% endif %}
+        <span class="badge badge-{{ pr.status }}">{{ pr.status }}</span>
+        {% if pr.severity %}<span class="badge">{{ pr.severity }}</span>{% endif %}
+        {% if pr.next_review_date %}<span class="muted">контроль: {{ pr.next_review_date }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">Нет активных проблем.</p>{% endif %}
+
+    <details>
+      <summary>+ добавить</summary>
+      <form method="post" action="/patients/{{ p.id }}/problems/create" class="form">
+        <label>Название <input name="title" required placeholder="НАЖБП"></label>
+        <label>МКБ-10 <input name="icd10" placeholder="K76.0"></label>
+        <label>Статус
+          <select name="status">
+            <option>active</option><option>chronic</option><option>monitoring</option>
+            <option>suspect</option><option>remission</option><option>resolved</option>
+          </select>
+        </label>
+        <label>Тяжесть <input name="severity" placeholder="medium / high / critical"></label>
+        <label>Следующий контроль <input type="date" name="next_review_date"></label>
+        <label>CarePlan-шаблон <input name="careplan_template" placeholder="NAFLD-11"></label>
+        <button>Добавить</button>
+      </form>
+    </details>
+  </div>
+
+  <!-- ── Личные задачи ── -->
+  <div class="card">
+    <h2>✅ Личные задачи</h2>
+    {% if s.tasks %}
+    <ul class="list">
+      {% for t in s.tasks %}
+      <li>
+        <strong>{{ t.title }}</strong>
+        {% if t.priority %}<span class="badge badge-{{ t.priority }}">{{ t.priority }}</span>{% endif %}
+        <span class="badge badge-{{ t.status }}">{{ t.status }}</span>
+        {% if t.deadline %}<span class="muted">до {{ t.deadline }}</span>{% endif %}
+        {% if t.cost_rub %}<span class="muted">~{{ t.cost_rub|int }} ₽</span>{% endif %}
+        {% if t.status != 'done' %}
+          <form method="post" action="/tasks/{{ t.id }}/done" class="inline"><button class="link">✓ done</button></form>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">Нет задач.</p>{% endif %}
+
+    <details>
+      <summary>+ добавить задачу</summary>
+      <form method="post" action="/patients/{{ p.id }}/tasks/create" class="form">
+        <label>Что сделать <input name="title" required></label>
+        <label>Приоритет
+          <select name="priority">
+            <option value="">—</option>
+            <option>критический</option><option>высокий</option>
+            <option>средний</option><option>низкий</option>
+          </select>
+        </label>
+        <label>Дедлайн <input type="date" name="deadline"></label>
+        <label>Частота
+          <select name="frequency">
+            <option value="">—</option>
+            <option>разово</option><option>ежедневно</option><option>еженедельно</option>
+            <option>ежемесячно</option><option>раз в 3 мес</option><option>раз в 6 мес</option><option>ежегодно</option>
+          </select>
+        </label>
+        <label>Стоимость, ₽ <input type="number" step="100" name="cost_rub"></label>
+        <label>Связать с проблемой
+          <select name="problem_id">
+            <option value="">—</option>
+            {% for pr in s.problems %}<option value="{{ pr.id }}">{{ pr.title }}</option>{% endfor %}
+          </select>
+        </label>
+        <button>Добавить</button>
+      </form>
+    </details>
+  </div>
+
+</section>
+
+<!-- ── Хронология визитов ── -->
+<section class="card wide">
+  <h2>📅 Хронология визитов</h2>
+  {% if s.visits %}
+  <table class="data">
+    <thead><tr><th>Дата</th><th>Тип</th><th>Врач</th><th>Клиника</th><th>Резюме</th></tr></thead>
+    <tbody>
+    {% for v in s.visits %}
+      <tr>
+        <td>{{ v.visit_date }}</td>
+        <td>{{ v.visit_type or '—' }}</td>
+        <td>{{ v.practitioner or '—' }}</td>
+        <td>{{ v.facility or '—' }}</td>
+        <td>{{ v.summary or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Нет визитов.</p>{% endif %}
+
+  <details>
+    <summary>+ добавить визит</summary>
+    <form method="post" action="/patients/{{ p.id }}/visits/create" class="form grid-form">
+      <label>Дата <input type="date" name="visit_date" required></label>
+      <label>Тип <input name="visit_type" placeholder="УЗИ ОБП"></label>
+      <label>Специальность <input name="specialty" placeholder="ophth / gastro / cardio"></label>
+      <label>Врач <input name="practitioner"></label>
+      <label>Клиника <input name="facility"></label>
+      <label class="full">Резюме <textarea name="summary" rows="2"></textarea></label>
+      <label>Следующий визит <input type="date" name="next_visit_date"></label>
+      <button>Добавить</button>
+    </form>
+  </details>
+</section>
+
+<!-- ── Последние наблюдения ── -->
+<section class="card wide">
+  <h2>🔬 Последние наблюдения</h2>
+  {% if s.latest_observations %}
+  <table class="data">
+    <thead><tr><th>Код</th><th>Название</th><th>Сторона</th><th>Значение</th><th>Норма</th><th>Флаг</th><th>Дата</th></tr></thead>
+    <tbody>
+    {% for o in s.latest_observations %}
+      <tr>
+        <td><code>{{ o.code }}</code></td>
+        <td>{{ o.display_name or '' }}</td>
+        <td>{{ o.body_site or '' }}</td>
+        <td><strong>{{ o.value_num if o.value_num is not none else o.value_text }}</strong> {{ o.unit or '' }}</td>
+        <td class="muted">{{ o.ref_low or '' }}–{{ o.ref_high or '' }}</td>
+        <td><span class="badge badge-{{ o.flag }}">{{ o.flag or '' }}</span></td>
+        <td class="muted">{{ o.observed_at[:10] }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">Нет наблюдений.</p>{% endif %}
+
+  <details>
+    <summary>+ добавить наблюдение</summary>
+    <form method="post" action="/patients/{{ p.id }}/observations/create" class="form grid-form">
+      <label>Код <input name="code" required placeholder="IOP_OD / HBA1C / LDL"></label>
+      <label>Название <input name="display_name" placeholder="ВГД OD"></label>
+      <label>Сторона <input name="body_site" placeholder="OD / OS / OU"></label>
+      <label>Значение <input name="value_num" type="number" step="any"></label>
+      <label>Единицы <input name="unit" placeholder="mmHg, mmol/L"></label>
+      <label>Норма (от) <input name="ref_low" type="number" step="any"></label>
+      <label>Норма (до) <input name="ref_high" type="number" step="any"></label>
+      <label>Дата <input type="datetime-local" name="observed_at" required></label>
+      <label class="full">Текстовое значение (если нет числового) <input name="value_text"></label>
+      <button>Добавить</button>
+    </form>
+  </details>
+</section>
+
+<!-- ── Файлы ── -->
+<section class="card wide">
+  <h2>📎 Файлы (PDF, фото, сканы)</h2>
+  {% if files %}
+  <ul class="list">
+    {% for f in files %}
+    <li>
+      <a href="/files/{{ f.id }}/open" target="_blank">{{ f.original_name or f.object_key }}</a>
+      <span class="muted">{{ (f.size_bytes / 1024)|round|int }} KB · {{ f.uploaded_at[:10] }}</span>
+      {% if f.description %} — {{ f.description }}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">Файлов нет.</p>{% endif %}
+
+  <details>
+    <summary>+ загрузить файл</summary>
+    <form method="post" action="/patients/{{ p.id }}/files/upload" enctype="multipart/form-data" class="form">
+      <label>Файл <input type="file" name="file" required></label>
+      <label>Описание <input name="description"></label>
+      <button>Загрузить</button>
+    </form>
+  </details>
+</section>
+
+{% endblock %}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Health OS{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://unpkg.com/htmx.org@2.0.3"></script>
+</head>
+<body>
+<header class="topbar">
+  <a href="/" class="logo">🩺 Health OS <span class="muted">— локально</span></a>
+  <nav>
+    <a href="/">Главная</a>
+    <a href="http://localhost:9001" target="_blank" class="muted">MinIO</a>
+    <a href="http://localhost:8000/docs" target="_blank" class="muted">API</a>
+    <a href="http://localhost:8080" target="_blank" class="muted">FHIR</a>
+  </nav>
+</header>
+
+<main>
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="muted small">
+  Это НЕ заменяет врача — только чеклист и хронология. Все данные хранятся локально на твоей машине.
+</footer>
+</body>
+</html>
